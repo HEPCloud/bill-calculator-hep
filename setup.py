@@ -14,7 +14,7 @@ setuptools.setup(
     license='MIT',
     url="https://github.com/HEPCloud/billing-calculator",
     packages=setuptools.find_packages(),
-    package_dir={'': './lib',},
+    package_dir={'lib': './lib',},
     classifiers=[
         "Programming Language :: Python :: 3",
         "License :: OSI Approved :: MIT License",
