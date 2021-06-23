@@ -6,7 +6,7 @@ with open("README.md", "r") as fh:
 setuptools.setup(
     name="bill-calculator-hep", # This needs to change soon
     version="0.0.10",
-    author="Maria P. Acosta F.",
+    author="Maria P. Acosta F./HEPCloud project",
     author_email="macosta@fnal.gov",
     description="Billing calculations and threshold alarms for hybrid cloud setups",
     long_description=long_description,

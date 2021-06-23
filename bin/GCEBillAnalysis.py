@@ -19,7 +19,7 @@ import datetime
 import yaml
 import traceback
 from datetime import timedelta
-#from submitAlarm import sendAlarmByEmail, submitAlarmOnServiceNow
+from boto.exception import NoAuthHandlerFound
 
 
 class GCEBillCalculator(object):
@@ -31,7 +31,6 @@ class GCEBillCalculator(object):
         self.project_id = constants['projectId']
         self.accountProfileName = constants['credentialsProfileName']
         self.accountNumber = constants['accountNumber']
-        #self.bucketBillingName = 'billing-' + str(self.project_id)
         self.bucketBillingName = constants['bucketBillingName']
         # Expect lastKnownBillDate as '%m/%d/%y %H:%M' : validated when needed
         self.lastKnownBillDate = constants[ 'lastKnownBillDate']
@@ -72,10 +71,6 @@ class GCEBillCalculator(object):
         return lastStartDateBilledConsideredDatetime, CorrectedBillSummaryDict
 
     def sendDataToGraphite(self, CorrectedBillSummaryDict ):
-        #Constants
-        # Data available from http://hepcmetrics.fnal.gov/dashboard/db/gce-account-spending
-        #graphiteHostString='fifemondata.fnal.gov'
-        #graphitePortNumber = 2104
         graphiteHost=self.globalConfig['graphite_host']
         graphiteContext=self.globalConfig['graphite_context_billing'] + str(self.project_id)
 
@@ -97,7 +92,18 @@ class GCEBillCalculator(object):
 
 
         # Access list of files from Goggle storage bucket
-        uri = boto.storage_uri( self.bucketBillingName, GOOGLE_STORAGE )
+# HK> this try statement is needed to make DE unit test work
+        try:
+            uri = boto.storage_uri(self.bucketBillingName, GOOGLE_STORAGE)
+            file_obj = uri.get_bucket()
+        except NoAuthHandlerFound:
+            self.logger.error(
+                "Unable to download GCE billing file names because auth is not set up")
+            return []
+        except Exception:
+            self.logger.error(
+                "Able to auth but unable to download GCE billing files")
+            return []
         filesList = []
         for obj in uri.get_bucket():
           filesList.append(obj.name)
@@ -262,7 +268,6 @@ class GCEBillCalculator(object):
                     key = row[ProductNameCsvHeaderString]
                     if key == '':
                         self.logger.exception("Missing Line Item in file %s, row: %s" % (fileName, row))
-                        #raise Exception("Missing Line Item in file %s, row: %s" % (fileName, row))
 
                     # For now we do not calculate support costs as they depend on Onix services only
 
@@ -284,13 +289,7 @@ class GCEBillCalculator(object):
         return lastStartDateBilledConsideredDatetime, BillSummaryDict;
 
     def _applyBillCorrections(self, BillSummaryDict):
-        # Need to apply corrections from the csv files coming from Amazon to reflect the final
-        # bill from DLT
-        # 1) Support charges seem to be due to support services offered by Onix
-        # 2) Do we have any discounts from Onix e.g. DLT gave us 7.25% ?
-        # 3) Can we establish a data egress waiver for GCE?
-        #
-        # This function also aggregates services according to these rules:
+        # This function aggregates services according to these rules:
         #
         #     SpendingCategory, ItemPattern, Example, Description
         #     compute-engine/instances, compute-engine/Vmimage*, com.google.cloud/services/compute-engine/VmimageN1Standard_1, Standard Intel N1 1 VCPU running in Americas
@@ -308,7 +307,6 @@ class GCEBillCalculator(object):
         #     cloud-storage/other, , , everything else w/o examples
         #     pubsub, pubsub/*, com.googleapis/services/pubsub/MessageOperations, Message Operations
         #     services, services/*, , Any other service under com.google.cloud/services/* not currently in the examples
-
 
         # Constants
         adjustedSupportCostKeyString = 'AdjustedSupport'
@@ -488,10 +486,8 @@ class GCEBillAlarm(object):
         """
 
         #Constants
-        # Data available from http://hepcmetrics.fnal.gov/dashboard/db/gce-account-spending
         graphiteHost=self.globalConfig['graphite_host']
         graphiteContext=self.globalConfig['graphite_context_alarms'] + str(self.projectId)
-        #graphiteContextString='hepcloud_priv_test.gce_alarms.' + str(self.projectId)
 
         graphiteEndpoint = graphite.Graphite(host=graphiteHost)
         graphiteEndpoint.send_dict(graphiteContext, alarmConditionsDict, send_data=True)

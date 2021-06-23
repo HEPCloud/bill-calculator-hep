@@ -23,15 +23,14 @@ class AWSBillCalculator(object):
         self.globalConfig = globalConfig
         # Configuration parameters
         self.outputPath = globalConfig['outputPath']
-# Now, we require AWS.yaml to have a new line in global section, accountDirs to be 0 or 1
-# 1 means bill files are saved in their account subdirs e.g. /home/awsbilling/bill-data/RnD or so
+        # Now, we require AWS.yaml to have a new line in global section, accountDirs to be 0 or 1
+        # 1 means bill files are saved in their account subdirs e.g. /home/awsbilling/bill-data/RnD or so
         self.accountDirs = False
         if ("accountDirs" in globalConfig.keys()) and (globalConfig['accountDirs'] != 0):
             self.accountDirs = True
         self.accountName = account
         self.accountProfileName = constants['credentialsProfileName']
         self.accountNumber = constants['accountNumber']
-        #self.bucketBillingName = str(self.accountNumber) + '-dlt-utilization'
         self.bucketBillingName = constants['bucketBillingName']
         # Expect lastKnownBillDate as '%m/%d/%y %H:%M' : validated when needed
         self.lastKnownBillDate = constants['lastKnownBillDate']
@@ -92,9 +91,7 @@ class AWSBillCalculator(object):
         self.logger.info('Last Known Balance :' + str(self.balanceAtDate))
         self.logger.info('Date of Last Known Balance : ' + self.lastKnownBillDate)
         self.logger.debug('BillSummaryDict:'.format(BillSummaryDict))
-        pprint.pprint(BillSummaryDict)
         self.logger.debug('CorrectedBillSummaryDict'.format(CorrectedBillSummaryDict))
-        pprint.pprint(CorrectedBillSummaryDict)
 
         return lastStartDateBilledConsideredDatetime, CorrectedBillSummaryDict
 
@@ -119,8 +116,6 @@ class AWSBillCalculator(object):
             none
         """
 
-        #Constants
-        # Data available from http://hepcmetrics.fnal.gov/dashboard/db/aws-accounts
         graphiteHost=self.globalConfig['graphite_host']
         graphiteContext=self.globalConfig['graphite_context_billing'] + str(self.accountName)
 
@@ -130,47 +125,6 @@ class AWSBillCalculator(object):
 
     def _obtainRoleBasedSession(self):
         """ Obtain a short-lived role-based token
-         Prerequisites:
-
-         arn:aws:iam::950490332792:role/CalculateBill is created in our accounts
-         with the following Trust relationship
-         {
-           "Version": "2012-10-17",
-           "Statement": [
-             {
-               "Effect": "Allow",
-               "Principal": {
-                 "AWS": "arn:aws:iam::950490332792:user/Billing"
-               },
-               "Action": "sts:AssumeRole"
-             }
-           ]
-         }
-
-         and policy BillCalculatorReadAccess as follows
-         {
-             "Version": "2012-10-17",
-             "Statement": [
-                 {
-                     "Effect": "Allow",
-                     "Action": [
-                         "s3:GetObject"
-                     ],
-                     "Resource": [
-                         "arn:aws:s3:::950490332792-dlt-utilization/*"
-                     ]
-                 },
-                 {
-                     "Effect": "Allow",
-                     "Action": [
-                         "s3:ListBucket"
-                     ],
-                     "Resource": [
-                         "arn:aws:s3:::950490332792-dlt-utilization"
-                     ]
-                 }
-             ]
-         }
         """
 
         roleNameString = 'CalculateBill'
@@ -339,17 +293,13 @@ class AWSBillCalculator(object):
     def _sumUpBillFromDateToDate(self, billCVSAggregateStr , sumFromDate, sumToDate = None):
         # CSV Billing file format documentation:
         #
-        # UnBlendedCost : the corrected cost of each item; unblended from the 4 accounts under
-        # our single master / payer account
+        # UnBlendedCost : the corrected cost of each item; unblended from the accounts under
+        # single master / payer account
         #
         # ProductName : S3, EC2, etc
         #
         # ItemDescription = contains("data transferred out") holds information about
         # charges due to data transfers out
-        #
-        # ItemDescription = EDU_R_FY2015_Q1_LT_FermiNationalAcceleratorLab
-        # Used to account for educational grant discounts. They are negative $ amounts.
-        # Should be skipped when accumulating cost
         #
         #  Returns:
         #               BillSummaryDict: (Keys depend on services present in the csv file)
@@ -379,7 +329,7 @@ class AWSBillCalculator(object):
         awsSupportBusinessCostKeyString = 'AWSSupportBusiness'
 
         educationalGrantRowIdentifyingString = 'EDU_'
-        unauthorizedUsageString = 'Unauthorized Usage' # 'Unauthorized Usage Exposed Key Root:0061992807'
+        unauthorizedUsageString = 'Unauthorized Usage'
         costOfGBOut = 0.09 # Assume highest cost of data transfer out per GB in $
 
         sumFromDateDatetime = datetime.datetime(*(time.strptime(sumFromDate, '%m/%d/%y %H:%M')[0:6]))
@@ -683,8 +633,6 @@ class AWSBillAlarm(object):
             none
         """
 
-        #Constants
-        # Data available at  http://hepcmetrics.fnal.gov/dashboard/db/aws-accounts
         graphiteContext=self.globalConfig['graphite_context_alarms'] + str(self.accountName)
 
         graphiteEndpoint = graphite.Graphite(host=self.graphiteHost)
@@ -716,18 +664,6 @@ class AWSBillDataEgress(object):
               'percentageOfEgressFromFirstOfMonth': 16.25824191940831
             }
         """
-        
-        ###############
-        # ASSUMPTIONS #
-        ###############
-        # Assume that data egress costs are 0 i.e. AWS does not make us pay for any data egress fee.
-        # Because of this, we are adding the estimated data egress fee to the total, for now.
-        # When this changes, we can calculate this by using the total directly and 
-        # EITHER (1) the billed data egress fee OR (2) the estimated data egress fee;
-        # (2) will always give us an estimate of the fee
-        # (1) may eventually be the cost above the 15% : will need to clarify how that
-        # charge is implemented
-        ################
 
         # Get total and last date billed 
         lastStartDateBilledDatetime, CorrectedBillSummaryNowDict = self.calculator.CalculateBill()
@@ -793,10 +729,7 @@ class AWSBillDataEgress(object):
             none
         """
         
-        #Constants
-        # Data available from http://hepcmetrics.fnal.gov/dashboard/db/aws-accounts
         graphiteContext=self.globalConfig['graphite_context_egress'] + str(self.accountName)
-
         graphiteEndpoint = graphite.Graphite(host=self.graphiteHost)
         graphiteEndpoint.send_dict(graphiteContext, dataEgressConditionsDict,  send_data=True)
 
@@ -804,13 +737,6 @@ class AWSBillDataEgress(object):
 
 if __name__ == "__main__":
 
-    #print '----------'
-    #print
-    #print
-    #print  'AWSBillAnalysis - %s\n' % time.strftime("%c")
-
-    #NOvA
-    #print '----------'
     os.setuid(53431)
     logger = logging.getLogger("AWS-UNIT-TEST")
     logger.handlers=[]
