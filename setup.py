@@ -5,7 +5,7 @@ with open("README.md", "r") as fh:
 
 setuptools.setup(
     name="bill-calculator-hep", # This needs to change soon
-    version="0.0.10",
+    version="0.0.11",
     author="Maria P. Acosta F./HEPCloud project",
     author_email="macosta@fnal.gov",
     description="Billing calculations and threshold alarms for hybrid cloud setups",
@@ -13,8 +13,8 @@ setuptools.setup(
     long_description_content_type="text/markdown",
     license='MIT',
     url="https://github.com/HEPCloud/billing-calculator",
-    packages=setuptools.find_packages(),
-    package_dir={'lib': './lib',},
+    packages=setuptools.find_packages(where='src'),
+    package_dir={'': 'src', },
     classifiers=[
         "Programming Language :: Python :: 3",
         "License :: OSI Approved :: MIT License",
