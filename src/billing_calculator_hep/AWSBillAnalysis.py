@@ -12,7 +12,7 @@ from datetime import timedelta
 import logging
 import sys
 import traceback
-import bill_calculator_hep.graphite
+import billing_calculator_hep.graphite
 #import graphite
 import configparser
 import yaml
