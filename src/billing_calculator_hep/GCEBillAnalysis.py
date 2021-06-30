@@ -2,7 +2,7 @@ import json
 import boto
 import gcs_oauth2_boto_plugin
 
-import bill_calculator_hep.graphite
+import billing_calculator_hep.graphite
 import logging
 
 import csv
