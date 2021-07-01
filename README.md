@@ -1,4 +1,8 @@
 # bill-calculator
+![PyPI](https://img.shields.io/pypi/v/bill-calculator-hep)
+![PyPI - Downloads](https://img.shields.io/pypi/dw/bill-calculator-hep)
+
+
 * This repository contains the refactored code for the HEPCloud Billing Calculator
 * Python3
 * Supports AWS and GCP and multiple accounts
