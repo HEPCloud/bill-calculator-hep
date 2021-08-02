@@ -3,4 +3,4 @@
 SOURCE=${PWD}
 cd ~awsbilling/bill-data/
 export BOTO_CONFIG=/home/awsbilling/.config/gcloud/legacy_credentials/billing\@hepcloud-fnal.iam.gserviceaccount.com/.boto
-python3.4 ${SOURCE}/hcf-bill-calculator
+python3 ${SOURCE}/hcf-bill-calculator.py

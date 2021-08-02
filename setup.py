@@ -4,15 +4,16 @@ with open("README.md", "r") as fh:
     long_description = fh.read()
 
 setuptools.setup(
-    name="bill-calculator-hep",
+    name="bill_calculator_hep",
     version="0.1.3",
     author="Maria P. Acosta F./HEPCloud project",
     author_email="macosta@fnal.gov",
     description="Billing calculations and threshold alarms for hybrid cloud setups",
+    install_requires=['gcs_oauth2_boto_plugin', 'pyparsing'],
     long_description=long_description,
     long_description_content_type="text/markdown",
     license='MIT',
-    url="https://github.com/HEPCloud/billing-calculator",
+    url="https://github.com/HEPCloud/bill-calculator-hep",
     packages=setuptools.find_packages(where='src'),
     package_dir={'': 'src', },
     classifiers=[
