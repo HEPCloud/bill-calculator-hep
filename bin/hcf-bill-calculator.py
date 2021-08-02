@@ -13,9 +13,9 @@ import traceback
 import threading
 import yaml
 
-from GCEBillAnalysis import GCEBillCalculator, GCEBillAlarm
-from AWSBillAnalysis import AWSBillCalculator, AWSBillAlarm, AWSBillDataEgress
-from submitAlarm import sendAlarmByEmail, submitAlarmOnServiceNow
+from bill-calculator-hep import GCEBillAnalysis, GCEBillCalculator, GCEBillAlarm
+from bill-calculator-hep import AWSBillAnalysis, AWSBillCalculator, AWSBillAlarm, AWSBillDataEgress
+from bill-calculator-hep import submitAlarm, sendAlarmByEmail, submitAlarmOnServiceNow
 
 class hcfBillingCalculator():
 
