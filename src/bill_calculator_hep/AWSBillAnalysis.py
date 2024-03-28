@@ -2,7 +2,6 @@ import boto3
 from boto3.session import Session
 from zipfile import ZipFile
 import csv
-import pprint
 import os
 from io import StringIO
 import re
@@ -133,7 +132,6 @@ class AWSBillCalculator(object):
         # long term credentials have ONLY the permission to assume role CalculateBill
         client = boto3.client('sts')
         response = client.assume_role( RoleArn=fullRoleNameString, RoleSessionName='roleSwitchSession'  )
-        pprint.pprint(response)
 
         role_AK_id = response['Credentials']['AccessKeyId']
         role_AK_sc = response['Credentials']['SecretAccessKey']
