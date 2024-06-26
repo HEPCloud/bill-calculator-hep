@@ -1,23 +1,14 @@
-import bill_calculator_hep.graphite
-import logging
-
-import csv
-from io import BytesIO
-from io import StringIO
-
-import string, re
-import datetime, time
 import sys, os, socket
+import datetime, time
+import logging
 import configparser
-import pprint
 import time
-import datetime
 import yaml
 import traceback
-from datetime import timedelta
-from google.cloud import bigquery
-from collections import defaultdict
 import pandas as pd
+from datetime import timedelta
+
+from google.cloud import bigquery
 
 class GCEBillCalculator(object):
     def __init__(self, account, globalConfig, constants, logger, sumToDate = None):
@@ -30,7 +21,6 @@ class GCEBillCalculator(object):
         self.balanceAtDate = constants['balanceAtDate']
         # Expect sumToDate as '%m/%d/%y %H:%M' : validated when needed
         self.sumToDate = constants['sumToDate'] # '08/31/16 23:59'
-
         self.logger.debug('Loaded account configuration successfully')
 
     def setLastKnownBillDate(self, lastKnownBillDate):
@@ -113,61 +103,61 @@ class GCEBillCalculator(object):
         graphiteEndpoint = graphite.Graphite(host=graphiteHost)
         graphiteEndpoint.send_dict(graphiteContext, CorrectedBillSummaryDict, send_data=True)
 
-def initializeConstantsForBillCalculation(self):
-    # defining required constants
-    # Google Cloud Billing project for HEPCloud Decision Engine is 'hepcloud-fnal' which is in GCE channel config
-    billingProjectId = self.project_id 
-    # as of May 2023, cloud billing was exported to BigQuery and the table containing this data is the standard usage cost table
-    billingDataset = f"{billingProjectId}.hepcloud_fnal_bigquery_billing"
-    billingDataTable = f"{billingDataset}.gcp_billing_export_v1_0175D2_253B59_AB11A7"
-    self.logger.info(f"billingProjectId = {billingProjectId}")
-    self.logger.info(f"billingDataset = {billingDataset}")
-    self.logger.info(f"billingDataTable = {billingDataTable}")
-    
-    # sumFromDate used previously in _sumUpBillFromDateToDate is the lastKnownBillDate
-    fromDate = self.lastKnownBillDate    # class 'str'
-    toDate = self.sumToDate              # class 'NoneType' unless `sumToDate` attribute is defined in the channel's configuration (jsonnet file)
-    # datetime.strptime converts a string to a datetime object
-    sumBillFromDate = datetime.datetime.strptime(self.lastKnownBillDate, '%m/%d/%y %H:%M')
-    self.logger.info(f"sumBillFromDate: {sumBillFromDate}")
-    if self.sumToDate != None:
-        sumBillToDate = datetime.datetime.strptime(self.sumToDate, '%m/%d/%y %H:%M')
-    else:
-        # TODO: change this to datetime.datetime.now
-        sumBillToDate = datetime.datetime.strptime("05/03/24 00:00", '%m/%d/%y %H:%M')
-    self.logger.info(f"sumBillToDate: {sumBillToDate}")
-    
-    usageStartFromDate = sumBillFromDate
-    self.logger.info(f"usageStartDate: {usageStartFromDate}")
-    usageEndToDate = sumBillToDate
-    self.logger.info(f"usageEndDate: {usageEndToDate}")
-    
-    # queries to query cloud billing data in BigQuery
-    costs_query = f"""
-    SELECT sku.description as Sku, service.description as Service, 
-    ROUND(SUM(CAST(cost AS NUMERIC)), 8) as rawCost, 
-    ROUND(SUM(IFNULL((SELECT SUM(CAST(c.amount AS NUMERIC)) 
-        FROM UNNEST(credits) AS c), 0)), 8) as rawCredits 
-    FROM `hepcloud-fnal.hepcloud_fnal_bigquery_billing.gcp_billing_export_v1_0175D2_253B59_AB11A7` 
-    WHERE project.id = "hepcloud-fnal" AND 
-    DATE(usage_start_time) BETWEEN "2024-02-01" AND "2024-02-29" AND 
-    DATE(usage_end_time) BETWEEN "2024-02-01" AND "2024-02-29"
-    GROUP BY 1, 2
-    """
-    adjustments_query = f"""
-    SELECT sku.description as Sku, service.description as Service,  
-    ROUND(SUM(CAST(cost AS NUMERIC)), 8) as rawAdjustments, 
-    ROUND(SUM(IFNULL((SELECT SUM(CAST(c.amount AS NUMERIC))
-        FROM UNNEST(credits) AS c), 0)), 8) as rawCredits 
-    FROM `hepcloud-fnal.hepcloud_fnal_bigquery_billing.gcp_billing_export_v1_0175D2_253B59_AB11A7` 
-    WHERE project.id = "hepcloud-fnal" AND 
-    DATE(usage_start_time) BETWEEN "2024-02-01" AND "2024-02-29" AND 
-    DATE(usage_end_time) BETWEEN "2024-02-01" AND "2024-02-29" AND 
-    adjustment_info.id IS NOT NULL 
-    GROUP BY 1, 2
-    """
-    
-    return costs_credits_query, adjustments_query
+    def initializeConstantsForBillCalculation(self):
+        # defining required constants
+        # Google Cloud Billing project for HEPCloud Decision Engine is 'hepcloud-fnal' which is in GCE channel config
+        billingProjectId = self.project_id 
+        # as of May 2023, cloud billing was exported to BigQuery and the table containing this data is the standard usage cost table
+        billingDataset = f"{billingProjectId}.hepcloud_fnal_bigquery_billing"
+        billingDataTable = f"{billingDataset}.gcp_billing_export_v1_0175D2_253B59_AB11A7"
+        self.logger.info(f"billingProjectId = {billingProjectId}")
+        self.logger.info(f"billingDataset = {billingDataset}")
+        self.logger.info(f"billingDataTable = {billingDataTable}")
+        
+        # sumFromDate used previously in _sumUpBillFromDateToDate is the lastKnownBillDate
+        fromDate = self.lastKnownBillDate    # class 'str'
+        toDate = self.sumToDate              # class 'NoneType' unless `sumToDate` attribute is defined in the channel's configuration (jsonnet file)
+        # datetime.strptime converts a string to a datetime object
+        sumBillFromDate = datetime.datetime.strptime(self.lastKnownBillDate, '%m/%d/%y %H:%M')
+        self.logger.info(f"sumBillFromDate: {sumBillFromDate}")
+        if self.sumToDate != None:
+            sumBillToDate = datetime.datetime.strptime(self.sumToDate, '%m/%d/%y %H:%M')
+        else:
+            # TODO: change this to datetime.datetime.now
+            sumBillToDate = datetime.datetime.strptime("05/03/24 00:00", '%m/%d/%y %H:%M')
+        self.logger.info(f"sumBillToDate: {sumBillToDate}")
+        
+        usageStartFromDate = sumBillFromDate
+        self.logger.info(f"usageStartDate: {usageStartFromDate}")
+        usageEndToDate = sumBillToDate
+        self.logger.info(f"usageEndDate: {usageEndToDate}")
+        
+        # queries to query cloud billing data in BigQuery
+        costs_query = f"""
+        SELECT sku.description as Sku, service.description as Service, 
+        ROUND(SUM(CAST(cost AS NUMERIC)), 8) as rawCost, 
+        ROUND(SUM(IFNULL((SELECT SUM(CAST(c.amount AS NUMERIC)) 
+            FROM UNNEST(credits) AS c), 0)), 8) as rawCredits 
+        FROM `hepcloud-fnal.hepcloud_fnal_bigquery_billing.gcp_billing_export_v1_0175D2_253B59_AB11A7` 
+        WHERE project.id = "hepcloud-fnal" AND 
+        DATE(usage_start_time) BETWEEN "2024-02-01" AND "2024-02-29" AND 
+        DATE(usage_end_time) BETWEEN "2024-02-01" AND "2024-02-29"
+        GROUP BY 1, 2
+        """
+        adjustments_query = f"""
+        SELECT sku.description as Sku, service.description as Service,  
+        ROUND(SUM(CAST(cost AS NUMERIC)), 8) as rawAdjustments, 
+        ROUND(SUM(IFNULL((SELECT SUM(CAST(c.amount AS NUMERIC))
+            FROM UNNEST(credits) AS c), 0)), 8) as rawCredits 
+        FROM `hepcloud-fnal.hepcloud_fnal_bigquery_billing.gcp_billing_export_v1_0175D2_253B59_AB11A7` 
+        WHERE project.id = "hepcloud-fnal" AND 
+        DATE(usage_start_time) BETWEEN "2024-02-01" AND "2024-02-29" AND 
+        DATE(usage_end_time) BETWEEN "2024-02-01" AND "2024-02-29" AND 
+        adjustment_info.id IS NOT NULL 
+        GROUP BY 1, 2
+        """
+        
+        return costs_credits_query, adjustments_query
 
 
 class GCEBillAlarm(object):
