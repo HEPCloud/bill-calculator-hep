@@ -1,7 +1,3 @@
-import json
-import boto
-import gcs_oauth2_boto_plugin
-
 import bill_calculator_hep.graphite
 import logging
 
@@ -19,28 +15,22 @@ import datetime
 import yaml
 import traceback
 from datetime import timedelta
-from boto.exception import NoAuthHandlerFound
-
+from google.cloud import bigquery
+from collections import defaultdict
+import pandas as pd
 
 class GCEBillCalculator(object):
     def __init__(self, account, globalConfig, constants, logger, sumToDate = None):
         self.logger = logger
         self.globalConfig = globalConfig
         # Configuration parameters
-        self.outputPath = globalConfig['outputPath']
         self.project_id = constants['projectId']
-        self.accountProfileName = constants['credentialsProfileName']
-        self.accountNumber = constants['accountNumber']
-        self.bucketBillingName = constants['bucketBillingName']
         # Expect lastKnownBillDate as '%m/%d/%y %H:%M' : validated when needed
         self.lastKnownBillDate = constants[ 'lastKnownBillDate']
         self.balanceAtDate = constants['balanceAtDate']
-        self.applyDiscount = constants['applyDiscount']
         # Expect sumToDate as '%m/%d/%y %H:%M' : validated when needed
-        self.sumToDate = sumToDate # '08/31/16 23:59'
+        self.sumToDate = constants['sumToDate'] # '08/31/16 23:59'
 
-        # Do not download the files twice for repetitive calls e.g. for alarms
-        self.fileNameForDownloadList = None
         self.logger.debug('Loaded account configuration successfully')
 
     def setLastKnownBillDate(self, lastKnownBillDate):
@@ -53,22 +43,68 @@ class GCEBillCalculator(object):
         self.sumToDate = sumToDate
 
     def CalculateBill(self):
+        # define necessary constants
+        query_costs_credits, query_adjustments = initializeConstantsForBillCalculation()
+        # totalCsvHeaderString = 'Total'
+        # adjustedSupportCostKeyString = 'AdjustedSupport'
+        # BillSummaryDict = { totalCsvHeaderString : 0.0 , adjustedSupportCostKeyString : 0.0 }
+        # print(f"MyDebug: BillSummaryDict: {BillSummaryDict}")
+        
+        # TODO: substitute the static date with the variables for usage from above
+        # using the BigQuery API to fetch Cloud Billing Data
+        bq_client = bigquery.Client()
+        costs_and_credits_result = bq_client.query(query_costs_credits).to_dataframe()
+        # dataframe columns, including numeric, have dtype object; convert to float type
+        # costs_and_credits_result['rawCost'] = costs_and_credits_result['rawCost'].astype('float64')
+        # costs_and_credits_result['rawCredits'] = costs_and_credits_result['rawCredits'].astype('float64')
+        costs_and_credits_result = costs_and_credits_result.astype({'rawCost': 'float64', 'rawCredits': 'float64'})
+        # group data based on service category
+        costs_and_credits = costs_and_credits_result.groupby('Service')[['Sku', 'rawCost', 'rawCredits']].apply(lambda x: x.set_index('Sku').to_dict(orient='index')).to_dict()
+        # costs_and_credits is a dictionary of the form:
+        # {service: {sku1: {rawCost: 1.00, rawCredits: 2.00}, sku2: {rawCost: 3.00, rawCredits: 0.00}}}
+        costSubtotals = defaultdict(float)
+        for service_name, sku in costs_and_credits.items():
+            for sku_name, usage_info in sku.items():
+                service = "-".join(service_name.lower().split())
+                sku = "".join(sku_name.split())
+                lineItem = f"{service}.{sku}"
+                total_usage_cost_float = float(sum(usage_info.values()))
+                costSubtotals[lineItem] = total_usage_cost_float
+                costSubtotals['TotalCost'] += total_usage_cost_float
+        costs = pd.DataFrame([costSubtotals])
+        self.logger.info(f"GCE costs: {costs}")
 
-        # Load data in memory
-        if self.fileNameForDownloadList == None:
-            self.fileNameForDownloadList = self._downloadBillFiles()
-
-        lastStartDateBilledConsideredDatetime, BillSummaryDict = self._sumUpBillFromDateToDate( self.fileNameForDownloadList, self.lastKnownBillDate, self.sumToDate );
-
-        CorrectedBillSummaryDict = self._applyBillCorrections(BillSummaryDict);
-
-        self.logger.info('Bill Computation for %s Account Finished at %s' % ( self.project_id, time.strftime("%c") ))
-        self.logger.info('Last Start Date Billed Considered : ' + lastStartDateBilledConsideredDatetime.strftime('%m/%d/%y %H:%M'))
-        self.logger.info('Last Known Balance :' + str(self.balanceAtDate))
-        self.logger.info('Date of Last Known Balance : ' + self.lastKnownBillDate)
-        self.logger.debug('BillSummaryDict:'.format(BillSummaryDict))
-        self.logger.debug('CorrectedBillSummaryDict'.format(CorrectedBillSummaryDict))
-        return lastStartDateBilledConsideredDatetime, CorrectedBillSummaryDict
+        # using similar logic to gather data about adjustments issued
+        adjustments_result = bq_client.query(query_adjustments).to_dataframe()
+        # dataframe columns, including numeric, have dtype object; convert to float type
+        # adjustments_result['rawAdjustments'] = adjustments_result['rawAdjustments'].astype('float64')
+        # adjustments_result['rawCredits'] = adjustments_result['rawCredits'].astype('float64')
+        adjustments_result = adjustments_result.astype({'rawAdjustments': 'float64', 'rawCredits': 'float64'})
+        # again group data based on service category
+        adjustments = adjustments_result.groupby('Service')[['Sku', 'rawAdjustments', 'rawCredits']].apply(lambda x: x.set_index('Sku').to_dict(orient='index')).to_dict()
+        # adjustments is a dictionary of the form:
+        # {service: {sku1: {rawAdjustments: 1.00, rawCredits: 2.00}, sku2: {rawAdjustments: 3.00, rawCredits: 0.00}}}
+        adjSubtotals = defaultdict(float)
+        for service_name, sku in adjustments.items():
+            for sku_name, usage_info in sku.items():
+                service = "-".join(service_name.lower().split())
+                sku = "".join(sku_name.split())
+                lineItem = f"{service}.{sku}"
+                total_adj_float = float(sum(usage_info.values()))
+                adjSubtotals[lineItem] = total_adj_float
+                adjSubtotals['TotalAdjustments'] += total_adj_float
+        adjustments = pd.DataFrame([adjSubtotals])
+        self.logger.info(f"GCE adjustments: {adjustments}")
+        
+        # self.logger.info('Bill Computation for %s Account Finished at %s' % ( self.project_id, time.strftime("%c") ))
+        # self.logger.info('Last Start Date Billed Considered : ' + lastStartDateBilledConsideredDatetime.strftime('%m/%d/%y %H:%M'))
+        self.logger.info(f"Last Known Balance : {self.balanceAtDate}")
+        self.logger.info(f"Date of Last Known Balance : {self.lastKnownBillDate}")
+        self.logger.debug(f"Costs (incl. credits) Summary: {costs}")
+        self.logger.debug(f"Adjustments (incl. credits) Summary: {adjustments}")
+        
+        # return lastStartDateBilledConsideredDatetime, CorrectedBillSummaryDict
+        return costs, adjustments
 
     def sendDataToGraphite(self, CorrectedBillSummaryDict ):
         graphiteHost=self.globalConfig['graphite_host']
@@ -77,294 +113,62 @@ class GCEBillCalculator(object):
         graphiteEndpoint = graphite.Graphite(host=graphiteHost)
         graphiteEndpoint.send_dict(graphiteContext, CorrectedBillSummaryDict, send_data=True)
 
+def initializeConstantsForBillCalculation(self):
+    # defining required constants
+    # Google Cloud Billing project for HEPCloud Decision Engine is 'hepcloud-fnal' which is in GCE channel config
+    billingProjectId = self.project_id 
+    # as of May 2023, cloud billing was exported to BigQuery and the table containing this data is the standard usage cost table
+    billingDataset = f"{billingProjectId}.hepcloud_fnal_bigquery_billing"
+    billingDataTable = f"{billingDataset}.gcp_billing_export_v1_0175D2_253B59_AB11A7"
+    self.logger.info(f"billingProjectId = {billingProjectId}")
+    self.logger.info(f"billingDataset = {billingDataset}")
+    self.logger.info(f"billingDataTable = {billingDataTable}")
+    
+    # sumFromDate used previously in _sumUpBillFromDateToDate is the lastKnownBillDate
+    fromDate = self.lastKnownBillDate    # class 'str'
+    toDate = self.sumToDate              # class 'NoneType' unless `sumToDate` attribute is defined in the channel's configuration (jsonnet file)
+    # datetime.strptime converts a string to a datetime object
+    sumBillFromDate = datetime.datetime.strptime(self.lastKnownBillDate, '%m/%d/%y %H:%M')
+    self.logger.info(f"sumBillFromDate: {sumBillFromDate}")
+    if self.sumToDate != None:
+        sumBillToDate = datetime.datetime.strptime(self.sumToDate, '%m/%d/%y %H:%M')
+    else:
+        # TODO: change this to datetime.datetime.now
+        sumBillToDate = datetime.datetime.strptime("05/03/24 00:00", '%m/%d/%y %H:%M')
+    self.logger.info(f"sumBillToDate: {sumBillToDate}")
+    
+    usageStartFromDate = sumBillFromDate
+    self.logger.info(f"usageStartDate: {usageStartFromDate}")
+    usageEndToDate = sumBillToDate
+    self.logger.info(f"usageEndDate: {usageEndToDate}")
+    
+    # queries to query cloud billing data in BigQuery
+    costs_query = f"""
+    SELECT sku.description as Sku, service.description as Service, 
+    ROUND(SUM(CAST(cost AS NUMERIC)), 8) as rawCost, 
+    ROUND(SUM(IFNULL((SELECT SUM(CAST(c.amount AS NUMERIC)) 
+        FROM UNNEST(credits) AS c), 0)), 8) as rawCredits 
+    FROM `hepcloud-fnal.hepcloud_fnal_bigquery_billing.gcp_billing_export_v1_0175D2_253B59_AB11A7` 
+    WHERE project.id = "hepcloud-fnal" AND 
+    DATE(usage_start_time) BETWEEN "2024-02-01" AND "2024-02-29" AND 
+    DATE(usage_end_time) BETWEEN "2024-02-01" AND "2024-02-29"
+    GROUP BY 1, 2
+    """
+    adjustments_query = f"""
+    SELECT sku.description as Sku, service.description as Service,  
+    ROUND(SUM(CAST(cost AS NUMERIC)), 8) as rawAdjustments, 
+    ROUND(SUM(IFNULL((SELECT SUM(CAST(c.amount AS NUMERIC))
+        FROM UNNEST(credits) AS c), 0)), 8) as rawCredits 
+    FROM `hepcloud-fnal.hepcloud_fnal_bigquery_billing.gcp_billing_export_v1_0175D2_253B59_AB11A7` 
+    WHERE project.id = "hepcloud-fnal" AND 
+    DATE(usage_start_time) BETWEEN "2024-02-01" AND "2024-02-29" AND 
+    DATE(usage_end_time) BETWEEN "2024-02-01" AND "2024-02-29" AND 
+    adjustment_info.id IS NOT NULL 
+    GROUP BY 1, 2
+    """
+    
+    return costs_credits_query, adjustments_query
 
-    def _downloadBillFiles(self):
-        # Identify what files need to be downloaded, given the last known balance date
-        # Download the files from google storage
-
-        # Constants
-        # URI scheme for Cloud Storage.
-        GOOGLE_STORAGE = 'gs'
-        LOCAL_FILE = 'file'
-        header_values = {"x-goog-project-id": self.project_id}
-
-        gcs_oauth2_boto_plugin.SetFallbackClientIdAndSecret("32555940559.apps.googleusercontent.com","ZmssLNjJy2998hD4CTg2ejr2")
-
-
-        # Access list of files from Goggle storage bucket
-# HK> this try statement is needed to make DE unit test work
-        try:
-            uri = boto.storage_uri(self.bucketBillingName, GOOGLE_STORAGE)
-            file_obj = uri.get_bucket()
-        except NoAuthHandlerFound:
-            self.logger.error(
-                "Unable to download GCE billing file names because auth is not set up")
-            return []
-        except Exception:
-            self.logger.error(
-                "Able to auth but unable to download GCE billing files")
-            return []
-        filesList = []
-        for obj in uri.get_bucket():
-          filesList.append(obj.name)
-        # Assumption: sort files by date using file name: this is true if file name convention is maintained
-        filesList.sort()
-
-        # Extract file creation date from the file name
-        # Assume a format such as this: Fermilab Billing Export-2016-08-22.csv
-        # billingFileNameIdentifier = 'Fermilab\ Billing\ Export\-20[0-9][0-9]\-[0-9][0-9]\-[0-9][0-9].csv'
-        billingFileNameIdentifier = 'hepcloud\-fnal\-20[0-9][0-9]\-[0-9][0-9]\-[0-9][0-9].csv'
-        billingFileMatch = re.compile(billingFileNameIdentifier)
-        billingFileDateIdentifier = '20[0-9][0-9]\-[0-9][0-9]\-[0-9][0-9]'
-        dateExtractionMatch = re.compile(billingFileDateIdentifier)
-        lastKnownBillDateDatetime = datetime.datetime(*(time.strptime(self.lastKnownBillDate, '%m/%d/%y %H:%M')[0:6]))
-
-        self.logger.debug('lastKnownBillDate ' +  self.lastKnownBillDate)
-        fileNameForDownloadList = []
-        previousFileForDownloadListDateTime = None
-        previousFileNameForDownloadListString = None
-        noFileNameMatchesFileNameIdentifier = True
-        for file in filesList:
-           self.logger.debug('File in bucket ' + self.bucketBillingName + ' : ' +  file)
-           # Is the file a billing file?
-           if billingFileMatch.search(file) is None:
-               continue
-           else:
-               noFileNameMatchesFileNameIdentifier = False
-           # extract date from file
-           dateMatch = dateExtractionMatch.search(file)
-           if dateMatch is None:
-             self.logger.exception('Cannot identify date in billing file name ' + file + ' with regex = "' + billingFileDateIdentifier + '"')
-             #raise Exception('Cannot identify date in billing file name ' + file + ' with regex = "' + billingFileDateIdentifier + '"')
-           date = dateMatch.group(0)
-           billDateDatetime = datetime.datetime(*(time.strptime(date, '%Y-%m-%d')[0:6]))
-           self.logger.debug('Date extracted from file: ' + billDateDatetime.strftime('%m/%d/%y %H:%M'))
-
-           # Start by putting the current file and file start date in the previous list
-           if not previousFileNameForDownloadListString:
-               previousFileNameForDownloadListString = file
-               previousFileForDownloadListDateTime = billDateDatetime
-               self.logger.debug('previousFileForDownloadListDateTime ' + previousFileForDownloadListDateTime.strftime('%m/%d/%y %H:%M'))
-               self.logger.debug('previousFileNameForDownloadListString ' + previousFileNameForDownloadListString)
-               self.logger.debug('fileNameForDownloadList: '.format(fileNameForDownloadList))
-
-           # if the last known bill date is past the start date of the previous file...
-           if lastKnownBillDateDatetime > previousFileForDownloadListDateTime:
-               self.logger.debug('lastKnownBillDateDatetime > previousFileForDownloadListDateTime: ' + lastKnownBillDateDatetime.strftime('%m/%d/%y %H:%M') + ' > ' + previousFileForDownloadListDateTime.strftime('%m/%d/%y %H:%M'))
-               # if the previous file starts and end around the last known bill date,
-               # add previous and current file name to the list
-               if lastKnownBillDateDatetime < billDateDatetime:
-                   fileNameForDownloadList = [ previousFileNameForDownloadListString, file ];
-                   self.logger.debug('lastKnownBillDateDatetime < billDateDatetime: ' + lastKnownBillDateDatetime.strftime('%m/%d/%y %H:%M') + ' < ' + billDateDatetime.strftime('%m/%d/%y %H:%M'))
-                   self.logger.debug('fileNameForDownloadList:'.format(fileNameForDownloadList))
-
-               previousFileForDownloadListDateTime = billDateDatetime
-               previousFileNameForDownloadListString = file
-               self.logger.debug('previousFileForDownloadListDateTime ' + previousFileForDownloadListDateTime.strftime('%m/%d/%y %H:%M'))
-               self.logger.debug('previousFileNameForDownloadListString ' + previousFileNameForDownloadListString)
-           else:
-               if not fileNameForDownloadList:
-                  fileNameForDownloadList = [ previousFileNameForDownloadListString ]
-               # at this point, all the files have a start date past the last known bill date: we want those files
-               fileNameForDownloadList.append(file)
-               self.logger.debug('fileNameForDownloadList:'.format(fileNameForDownloadList))
-
-        if noFileNameMatchesFileNameIdentifier:
-           self.logger.exception('No billing files found in bucket ' + self.bucketBillingName + ' looking for patterns containing ' + billingFileNameIdentifier)
-           #raise Exception('No billing files found in bucket ' + self.bucketBillingName + ' looking for patterns containing ' + billingFileNameIdentifier)
-
-        # After looking at all the files, if their start date is always older than the last known billing date,
-        # we take the last file
-        if fileNameForDownloadList == []:
-            fileNameForDownloadList = [ file ]
-
-        self.logger.debug('fileNameForDownloadList:'.format(fileNameForDownloadList))
-
-        # Download files to the local directory
-        new_fileNameForDownloadList = []
-        for fileNameForDownload in fileNameForDownloadList:
-            src_uri = boto.storage_uri(self.bucketBillingName + '/' + fileNameForDownload, GOOGLE_STORAGE)
-
-            # Create a file-like object for holding the object contents.
-            object_contents = BytesIO()
-
-            # The unintuitively-named get_file() doesn't return the object
-            # contents; instead, it actually writes the contents to
-            # object_contents.
-            src_uri.get_key().get_file(object_contents)
-
-            outputfile = os.path.join(self.outputPath, fileNameForDownload)
-            local_dst_uri = boto.storage_uri(outputfile, LOCAL_FILE)
-            object_contents.seek(0)
-            local_dst_uri.new_key().set_contents_from_file(object_contents)
-            object_contents.close()
-            new_fileNameForDownloadList.append(outputfile)
-
-        return new_fileNameForDownloadList
-
-
-    def _sumUpBillFromDateToDate(self, fileList , sumFromDate, sumToDate = None):
-        # CSV Billing file format documentation:
-        # https://support.google.com/cloud/answer/6293835?rd=1
-        # https://cloud.google.com/storage/pricing
-        #
-        # Cost : the cost of each item; no concept of "unblended" cost in GCE, it seems.
-        #
-        # Line Item : The URI of the specified resource. Very fine grained. Need to be grouped
-        #
-        # Project ID : multiple project billing in the same file
-        #
-        #  Returns:
-        #               BillSummaryDict: (Keys depend on services present in the csv file)
-
-
-        # Constants
-        itemDescriptionCsvHeaderString = 'ItemDescription'
-        ProductNameCsvHeaderString = 'Line Item'
-        costCsvHeaderString = 'Cost'
-        usageStartDateCsvHeaderString = 'Start Time'
-        totalCsvHeaderString = 'Total'
-        ProjectID = 'Project ID'
-        adjustedSupportCostKeyString = 'AdjustedSupport'
-
-        sumFromDateDatetime = datetime.datetime(*(time.strptime(sumFromDate, '%m/%d/%y %H:%M')[0:6]))
-        lastStartDateBilledConsideredDatetime = sumFromDateDatetime
-        if sumToDate != None:
-            sumToDateDatetime = datetime.datetime(*(time.strptime(sumToDate, '%m/%d/%y %H:%M')[0:6]))
-        BillSummaryDict = { totalCsvHeaderString : 0.0 , adjustedSupportCostKeyString : 0.0 }
-
-
-        for fileName in fileList:
-            file = open(fileName, 'r')
-            csvfilereader = csv.DictReader(file)
-            rowCounter=0
-
-            for row in csvfilereader:
-                # Skip if there is no date (e.g. final comment lines)
-                if row[usageStartDateCsvHeaderString] == '' :
-                   self.logger.exception("Missing Start Time in row: ", row)
-
-                if row[ProjectID] != self.project_id:
-                    continue
-
-                # Skip rows whose UsageStartDate is prior to sumFromDate and past sumToDate
-                # Remove timezone info, as python 2.4 does not support %z and we consider local time
-                # Depending on standard vs. daylight time we have a variation on that notation.
-                dateInRowStr = re.split('-0[7,8]:00',row[usageStartDateCsvHeaderString])[0]
-                usageStartDateDatetime = datetime.datetime(*(time.strptime(dateInRowStr, '%Y-%m-%dT%H:%M:%S')[0:6]))
-                if usageStartDateDatetime < sumFromDateDatetime :
-                   continue;
-
-                if sumToDate != None:
-                    if usageStartDateDatetime > sumToDateDatetime :
-                        continue;
-
-                if usageStartDateDatetime > lastStartDateBilledConsideredDatetime:
-                   lastStartDateBilledConsideredDatetime = usageStartDateDatetime
-
-                # Sum up the costs
-                try:
-                    rowCounter+=1
-                    key = row[ProductNameCsvHeaderString]
-                    if key == '':
-                        self.logger.exception("Missing Line Item in file %s, row: %s" % (fileName, row))
-
-                    # For now we do not calculate support costs as they depend on Onix services only
-
-                    # Add up cost per product (i.e. key) and total cost
-                    # totalCsvHeaderString already exists within the dictionary: it is added first
-                    # as it is guaranteed not to throw a KeyError exception.
-                    BillSummaryDict[ totalCsvHeaderString ] += float(row[costCsvHeaderString])
-                    BillSummaryDict[ key ] += float(row[costCsvHeaderString])
-
-
-                # If it is the first time that we encounter this key (product), add it to the dictionary
-                except KeyError:
-                    BillSummaryDict[ key ] = float(row[costCsvHeaderString])
-                except Exception as e:
-                    logger.error("An exception was thrown while reading row: "+row)
-                    logger.exception(e)
-                   # raise e
-
-        return lastStartDateBilledConsideredDatetime, BillSummaryDict;
-
-    def _applyBillCorrections(self, BillSummaryDict):
-        # This function aggregates services according to these rules:
-        #
-        #     SpendingCategory, ItemPattern, Example, Description
-        #     compute-engine/instances, compute-engine/Vmimage*, com.google.cloud/services/compute-engine/VmimageN1Standard_1, Standard Intel N1 1 VCPU running in Americas
-        #     compute-engine/instances, compute-engine/Licensed*, com.google.cloud/services/compute-engine/Licensed1000206F1Micro, Licensing Fee for CentOS 6 running on Micro instance with burstable CPU
-        #     compute-engine/network, compute-engine/Network*, com.google.cloud/services/compute-engine/NetworkGoogleEgressNaNa, Network Google Egress from Americas to Americas
-        #     compute-engine/network, compute-engine/Network*, com.google.cloud/services/compute-engine/NetworkInterRegionIngressNaNa, Network Inter Region Ingress from Americas to Americas
-        #     compute-engine/network, compute-engine/Network*, com.google.cloud/services/compute-engine/NetworkInternetEgressNaApac, Network Internet Egress from Americas to APAC
-        #     compute-engine/storage, compute-engine/Storage*, com.google.cloud/services/compute-engine/StorageImage, Storage Image
-        #     compute-engine/storage, compute-engine/Storage*, com.google.cloud/services/compute-engine/StoragePdCapacity, Storage PD Capacity
-        #     compute-engine/other, , , everything else w/o examples
-        #     cloud-storage/storage, cloud-storage/Storage*, com.google.cloud/services/cloud-storage/StorageStandardUsGbsec, Standard Storage US
-        #     cloud-storage/network, cloud-storage/Bandwidth*, com.google.cloud/services/cloud-storage/BandwidthDownloadAmerica, Download US EMEA
-        #     cloud-storage/operations, cloud-storage/Class*, com.google.cloud/services/cloud-storage/ClassARequest, Class A Operation Request e.g. list obj in bucket ($0.10 per 10,000)
-        #     cloud-storage/operations, cloud-storage/Class*, com.google.cloud/services/cloud-storage/ClassBRequest, Class B Operation Request e.g. get obj ($0.01 per 10,000)
-        #     cloud-storage/other, , , everything else w/o examples
-        #     pubsub, pubsub/*, com.googleapis/services/pubsub/MessageOperations, Message Operations
-        #     services, services/*, , Any other service under com.google.cloud/services/* not currently in the examples
-
-        # Constants
-        adjustedSupportCostKeyString = 'AdjustedSupport'
-        adjustedTotalKeyString = 'AdjustedTotal'
-        balanceAtDateKeyString = 'Balance'
-        totalKeyString = 'Total'
-        ignoredEntries = ['Total', 'AdjustedSupport']
-
-        # using an array of tuples rather than a dictionary to enforce an order
-        # (as soon as there's a match, no other entries are checked: higher priority
-        # (i.e. more detailed) categories should be entered first
-        # (using regex in case future entries need more complex parsing;
-        # (there shouldn't be any noticeable performance loss (actually, regex may even be faster than find()!
-        # '/' acts as '.' in graphite (i.e. it's a separator)
-        spendingCategories = [
-                                ('compute-engine.instances', re.compile('com\.google\.cloud/services/compute-engine/(Vmimage|Licensed)')),
-                                ('compute-engine.network'  , re.compile('com\.google\.cloud/services/compute-engine/Network')),
-                                ('compute-engine.storage'  , re.compile('com\.google\.cloud/services/compute-engine/Storage')),
-                                ('compute-engine.other'    , re.compile('com\.google\.cloud/services/compute-engine/')),
-                                ('cloud-storage.storage'   , re.compile('com\.google\.cloud/services/cloud-storage/Storage')),
-                                ('cloud-storage.network'   , re.compile('com\.google\.cloud/services/cloud-storage/Bandwidth')),
-                                ('cloud-storage.operations', re.compile('com\.google\.cloud/services/cloud-storage/Class')),
-                                ('cloud-storage.other'     , re.compile('com\.google\.cloud/services/cloud-storage/')),
-                                ('pubsub'                  , re.compile('com\.googleapis/services/pubsub/')),
-                                ('services'                , re.compile('')) # fallback category
-                             ]
-        
-        egressCategories = [
-                                ('compute-engine.egresstotal'  , re.compile('com\.google\.cloud/services/compute-engine/Network.*Egress.')),
-                                ('compute-engine.egressoutsideNa'  , re.compile('com\.google\.cloud/services/compute-engine/Network.*Egress((?!NaNa).)')),
-                             ]
-
-        CorrectedBillSummaryDict = dict([ (key, 0) for key in [ k for k,v in spendingCategories ] ])
-        # use the line above if dict comprehensions are not yet supported
-        #CorrectedBillSummaryDict = { key: 0.0 for key in [ k for k,v in spendingCategories ] }
-
-        for entryName, entryValue in BillSummaryDict.items():
-            if entryName not in ignoredEntries:
-                for categoryName, categoryRegex in spendingCategories:
-                    if categoryRegex.match(entryName):
-                        try:
-                            CorrectedBillSummaryDict[categoryName] += entryValue
-                        except KeyError:
-                            CorrectedBillSummaryDict[categoryName] = entryValue
-                        break
-                for categoryName, categoryRegex in egressCategories:
-                    if categoryRegex.match(entryName):
-                        try:
-                            CorrectedBillSummaryDict[categoryName] += entryValue
-                        except KeyError:
-                            CorrectedBillSummaryDict[categoryName] = entryValue
-
-        # Calculate totals
-        CorrectedBillSummaryDict[adjustedSupportCostKeyString] = BillSummaryDict[ adjustedSupportCostKeyString ]
-        CorrectedBillSummaryDict[adjustedTotalKeyString] = BillSummaryDict[ totalKeyString ] + BillSummaryDict[ adjustedSupportCostKeyString ]
-        CorrectedBillSummaryDict[balanceAtDateKeyString] = self.balanceAtDate - CorrectedBillSummaryDict[adjustedTotalKeyString]
-
-        return CorrectedBillSummaryDict
 
 class GCEBillAlarm(object):
 
