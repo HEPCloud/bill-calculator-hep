@@ -1,6 +1,7 @@
 # standard library imports
 import sys, os, socket
-import datetime, time
+import datetime
+import time
 import logging
 import configparser
 import time
@@ -23,7 +24,7 @@ class GCEBillCalculator(object):
         self.balanceAtDate = constants['balanceAtDate']
         self.applyDiscount = constants['applyDiscount']
         # Expect sumToDate as '%m/%d/%y %H:%M' : validated when needed
-        self.sumToDate = constants['sumToDate'] # '08/31/16 23:59'
+        self.sumToDate = constants['sumToDate'] #  '08/31/16 23:59'
         self.logger.info('Loaded account configuration successfully')
 
     def setLastKnownBillDate(self, lastKnownBillDate):
@@ -37,12 +38,15 @@ class GCEBillCalculator(object):
 
     def CalculateBill(self):
         """
-        This method calculates the bill amount for the Google Cloud services used across a specific time period (as defined in the GCE billing channel configuration).
+        This method calculates the bill amount for the Google Cloud Services
+        used across a specific time period (as defined in the GCE billing
+        channel configuration).
         """
         # defining a few constants...
         query_costs_credits, query_adjustments, last_start_date_billed_considered = self.InitializeConstantsForBillCalculation()
 
-        # defining additional constants that will be used to store cloud billing data from BigQuery...
+        # defining additional constants that will be used to store cloud billing
+        # data from BigQuery...
         adj_key = "Adjustments"
         adjusted_total_key = "AdjustedTotal"
         balance_at_date_key = "Balance"
@@ -50,7 +54,8 @@ class GCEBillCalculator(object):
         total_key = "Total"
         adjusted_support_cost_key = "AdjustedSupport"
 
-        # invoking bigquery client APIs to query BigQuery for cloud billing data...
+        # invoking bigquery client APIs to query BigQuery for cloud billing
+        # data...
         bq_client = bigquery.Client()
         line_items_costs = self.CalculateSubTotals(bq_client, query_costs_credits, cost_query=True)
         self.logger.debug(f"Line item costs: {line_items_costs}")
@@ -59,17 +64,20 @@ class GCEBillCalculator(object):
         adj_issued = self.CalculateSubTotals(bq_client, query_adjustments)
         self.logger.debug(f"Line Item adjustments: {adj_issued}")
 
-        # adding information from the adjustments dictionary to the costs dictionary...
+        # adding information from the adjustments dictionary to the costs
+        # dictionary...
         for adj_line_item in adj_issued:
             # if the key is 'Total', skip the iteration
             if adj_line_item == total_key:
                 continue
-            # if the key is not found in the list of keys for the dictionary containing line items costs, then report an error/throw a warning
+            # if the key is not found in the list of keys for the dictionary
+            # containing line items costs, then report an error/throw a warning
             if adj_line_item not in line_items_costs:
                 self.logger.error("something is wrong")
             # get the value for the key in line items costs dictionary
             value = line_items_costs[adj_line_item]
-            # add a new key-pair to the line item entry in the line items costs dictionary; the key-pair represents the adjustments info
+            # add a new key-pair to the line item entry in the line items costs
+            # dictionary; the key-pair represents the adjustments info
             line_items_costs[adj_line_item][adj_key] = adj_issued[adj_line_item]
         # after the adjustments info is added, calculate the adjusted total
         line_items_costs[adjusted_total_key] = line_items_costs[total_key] + line_items_costs[adjusted_support_cost_key]
@@ -81,7 +89,9 @@ class GCEBillCalculator(object):
         self.logger.info(f"Last Known Balance : {str(self.balanceAtDate)}")
         self.logger.info(f"Date of Last Known Balance : {self.lastKnownBillDate}")
         self.logger.info(f"Bill Summary: {line_items_costs}")
-        # converting the dictionary containing line items costs to a dataframe before returning from here since the calling function requires a dataframe...
+        # converting the dictionary containing line items costs to a dataframe
+        # before returning from here since the calling function requires a
+        # dataframe...
         costs = pd.DataFrame([line_items_costs])
 
         return costs
@@ -97,9 +107,11 @@ class GCEBillCalculator(object):
         """
         This method initializes several constants necessary for calculating the bill amount for using Google Cloud services
         """
-        # Google Cloud Billing project for HEPCloud Decision Engine is 'hepcloud-fnal' which is in GCE channel config
+        # Google Cloud Billing project for HEPCloud Decision Engine is
+        # 'hepcloud-fnal' which is in GCE channel config
         billing_project_id = self.project_id
-        # as of May 2023, cloud billing was exported to BigQuery and the table containing this data is the standard usage cost table
+        # as of May 2023, cloud billing was exported to BigQuery and the table
+        # containing this data is the standard usage cost table
         billing_dataset = f"{billing_project_id}.hepcloud_fnal_bigquery_billing"
         billing_data_table = f"{billing_dataset}.gcp_billing_export_v1_0175D2_253B59_AB11A7"
         self.logger.info(f"Billing project id = {billing_project_id}")
@@ -107,68 +119,74 @@ class GCEBillCalculator(object):
         self.logger.info(f"Billing data table = {billing_data_table}")
 
         # sumFromDate used previously in _sumUpBillFromDateToDate is the lastKnownBillDate; this is the last time that we compared the billing info we had versus the actual bill. As an example, if lastKnownBillDate is defined to be 04/01/22, download everything from april 22 until now and not go back farther than that
-        bill_from = self.lastKnownBillDate    # class 'str'
-        bill_to = self.sumToDate              # class 'NoneType' unless `sumToDate` attribute is defined in the channel's configuration (jsonnet file)
+        bill_from = self.lastKnownBillDate    #  class 'str'
+        bill_to = self.sumToDate              #  class 'NoneType' unless `sumToDate` attribute is defined in the channel's configuration (jsonnet file)
         # datetime.strptime converts a string to a datetime object
         sum_bill_from = datetime.datetime.strptime(bill_from, '%m/%d/%y %H:%M')
         self.logger.info(f"Calculate cloud billing expenses from: {sum_bill_from}")
         last_start_date = sum_bill_from
-        if bill_to != None:
+        if bill_to is not None:
             sum_bill_to = datetime.datetime.strptime(bill_to, '%m/%d/%y %H:%M')
         else:
             # TODO: change this to datetime.datetime.now
             sum_bill_to = datetime.datetime.strptime("05/03/24 00:00", '%m/%d/%y %H:%M')
         self.logger.info(f"Calculate cloud billing expenses to: {sum_bill_to}")
 
-        usage_start_from = sum_bill_from        # class datetime.datetime
+        usage_start_from = sum_bill_from        #  class datetime.datetime
         self.logger.info(f"usageStartDate: {usage_start_from}")
-        usage_end_to = sum_bill_to              # class datetime.datetime
+        usage_end_to = sum_bill_to              #  class datetime.datetime
         self.logger.info(f"usageEndDate: {usage_end_to}")
 
         # queries to query cloud billing data in BigQuery
         # date format in bigquery: YYYY-MM-DD HH:MM:SS:MS TZ
         costs_query = f'''
-        SELECT sku.description as Sku, service.description as Service, 
-        ROUND(SUM(CAST(cost AS NUMERIC)), 8) as rawCost, 
-        ROUND(SUM(IFNULL((SELECT SUM(CAST(c.amount AS NUMERIC)) 
-            FROM UNNEST(credits) AS c), 0)), 8) as rawCredits 
-        FROM `hepcloud-fnal.hepcloud_fnal_bigquery_billing.gcp_billing_export_v1_0175D2_253B59_AB11A7` 
-        WHERE project.id = "hepcloud-fnal" AND 
-        DATE(usage_start_time) BETWEEN "{usage_start_from.date()}" AND "{usage_end_to.date()}" AND DATE(usage_end_time) BETWEEN "{usage_start_from.date()}" AND "{usage_end_to.date()}"
+        SELECT sku.description as Sku, service.description as Service, ROUND(SUM(CAST(cost AS NUMERIC)), 8) as rawCost, ROUND(SUM(IFNULL((SELECT SUM(CAST(c.amount AS NUMERIC)) FROM UNNEST(credits) AS c), 0)), 8) as rawCredits FROM `hepcloud-fnal.hepcloud_fnal_bigquery_billing.gcp_billing_export_v1_0175D2_253B59_AB11A7` WHERE project.id = "hepcloud-fnal" AND DATE(usage_start_time) BETWEEN "{usage_start_from.date()}" AND "{usage_end_to.date()}" AND DATE(usage_end_time) BETWEEN "{usage_start_from.date()}" AND "{usage_end_to.date()}"
         GROUP BY 1, 2
         '''
         adjustments_query = f'''
-        SELECT sku.description as Sku, service.description as Service,  
-        ROUND(SUM(CAST(cost AS NUMERIC)), 8) as rawAdjustments, 
-        ROUND(SUM(IFNULL((SELECT SUM(CAST(c.amount AS NUMERIC))
-            FROM UNNEST(credits) AS c), 0)), 8) as rawCredits 
-        FROM `hepcloud-fnal.hepcloud_fnal_bigquery_billing.gcp_billing_export_v1_0175D2_253B59_AB11A7` 
-        WHERE project.id = "hepcloud-fnal" AND 
-        DATE(usage_start_time) BETWEEN "{usage_start_from.date()}" AND "{usage_end_to.date()}" AND DATE(usage_end_time) BETWEEN "{usage_start_from.date()}" AND "{usage_end_to.date()}" AND 
-        adjustment_info.id IS NOT NULL 
+        SELECT sku.description as Sku, service.description as Service,
+        ROUND(SUM(CAST(cost AS NUMERIC)), 8) as rawAdjustments,
+        ROUND(SUM(IFNULL((SELECT SUM(CAST(c.amount AS NUMERIC)) FROM
+        UNNEST(credits) AS c), 0)), 8) as rawCredits FROM
+        `hepcloud-fnal.hepcloud_fnal_bigquery_billing.gcp_billing_export_v1_0175D2_253B59_AB11A7`
+        WHERE project.id = "hepcloud-fnal" AND DATE(usage_start_time) BETWEEN
+        "{usage_start_from.date()}" AND "{usage_end_to.date()}" AND
+        DATE(usage_end_time) BETWEEN "{usage_start_from.date()}" AND
+        "{usage_end_to.date()}" AND adjustment_info.id IS NOT NULL
         GROUP BY 1, 2
         '''
 
         return costs_query, adjustments_query, last_start_date
 
-    def QueryCloudBillingData(self, bigquery_client, query, cost_query = None):
+    def QueryCloudBillingData(self, bigquery_client, query, cost_query=None):
+        """
+        This method queries BigQuery to fetch costs,
+        credits and adjustments data from cloud billing data.
+        """
         query_result = bigquery_client.query(query).to_dataframe()
-        # check the query flag to determine whether query for costs or adjustments was run
+        # check the query flag to determine whether query for costs or
+        # adjustments was run
         if cost_query:
             target_column = 'rawCost'
         else:
             target_column = 'rawAdjustments'
-        # dataframe columns, including numeric, have dtype object; convert to float type
+        # dataframe columns, including numeric, have dtype object; convert to
+        # float type
         query_result = query_result.astype({target_column: 'float64', 'rawCredits': 'float64'})
         # group data based on service category
         result = query_result.groupby('Service')[['Sku', target_column, 'rawCredits']].apply(lambda x: x.set_index('Sku').to_dict(orient='index')).to_dict()
-        # 'result' is a dictionary of the form: 
-        # {service: {sku1: {rawCost: 1.00, rawCredits: 2.00}, sku2: {rawCost: 3.00, rawCredits: 0.00}}}, (OR)
-        # {service: {sku1: {rawAdjustments: 1.00, rawCredits: 2.00}, sku2: {rawAdjustments: 3.00, rawCredits: 0.00}}}
+        # 'result' is a dictionary of the form: {service: {sku1: {rawCost: 1.00,
+        # rawCredits: 2.00}, sku2: {rawCost: 3.00, rawCredits: 0.00}}}, (OR)
+        # {service: {sku1: {rawAdjustments: 1.00, rawCredits: 2.00}, sku2:
+        # {rawAdjustments: 3.00, rawCredits: 0.00}}}
 
         return result, target_column
 
     def CalculateSubTotals(self, bigquery_client, query, cost_query = None):
+        """
+        This method conputes the total cost and total adjustments
+        issued individually.
+        """
         # defining additional constants that will be used to store cloud billing data from BigQuery...
         raw_cost_key = "rawCost"
         credit_key = "Credits"
@@ -189,12 +207,18 @@ class GCEBillCalculator(object):
                 line_item = f"{service}.{sku}"
                 if cost_query:
                     total = float(sum(usage_info.values()))
-                    # cost is before credits; so add credits to cost to get the actual costs for the sku/service
-                    sub_totals[line_item] =  {raw_cost_key: usage_info[cost_column], credit_key: usage_info['rawCredits'], cost_key: total}
+                    # cost is before credits; so add credits to cost to get the
+                    # actual costs for the sku/service
+                    sub_totals[line_item] = {
+                        raw_cost_key: usage_info[cost_column],
+                        credit_key: usage_info['rawCredits'],
+                        cost_key: total
+                    }
                 else:
                     total = float(sum(usage_info.values()))
                     sub_totals[line_item] = total
-                # add the line item cost to the cumulative costs for the time window for which the bill is being calculated
+                # add the line item cost to the cumulative costs for the time
+                # window for which the bill is being calculated
                 sub_totals[total_key] += total
 
         return sub_totals
