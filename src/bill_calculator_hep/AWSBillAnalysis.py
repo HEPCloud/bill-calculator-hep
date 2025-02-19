@@ -318,7 +318,7 @@ class AWSBillCalculator(object):
         totalDataOutCsvHeaderString = 'TotalDataOut'
         estimatedTotalDataOutCsvHeaderString = 'EstimatedTotalDataOut'
         usageQuantityHeaderString = 'UsageQuantity'
-        unBlendedCostCsvHeaderString = 'UnBlendedCost'
+        unBlendedCostCsvHeaderString = 'UnblendedCost'
         usageStartDateCsvHeaderString = 'UsageStartDate'
         totalCsvHeaderString = 'Total'
 
