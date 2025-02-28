@@ -5,11 +5,11 @@ with open("README.md", "r") as fh:
 
 setuptools.setup(
     name="bill_calculator_hep",
-    version="0.1.3",
+    version="0.2.1",
     author="Maria P. Acosta F./HEPCloud project",
     author_email="macosta@fnal.gov",
     description="Billing calculations and threshold alarms for hybrid cloud setups",
-    install_requires=['gcs_oauth2_boto_plugin', 'pyparsing'],
+    install_requires=['gcs_oauth2_boto_plugin', 'pyparsing', 'google-cloud-bigquery'],
     long_description=long_description,
     long_description_content_type="text/markdown",
     license='MIT',
