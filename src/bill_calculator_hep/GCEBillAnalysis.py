@@ -12,6 +12,7 @@ from collections import defaultdict
 # related third party imports
 import pandas as pd
 from google.cloud import bigquery
+from google.auth.exceptions import RefreshError, DefaultCredentialsError
 
 class GCEBillCalculator(object):
     def __init__(self, account, globalConfig, constants, logger, sumToDate = None):
@@ -24,51 +25,56 @@ class GCEBillCalculator(object):
         self.balanceAtDate = constants['balanceAtDate']
         self.applyDiscount = constants['applyDiscount']
         # Expect sumToDate as '%m/%d/%y %H:%M' : validated when needed
-        self.sumToDate = constants['sumToDate'] #  '08/31/16 23:59'
+        self.sumToDate = sumToDate #  '08/31/16 23:59'
         self.logger.info('Loaded account configuration successfully')
 
-    def setLastKnownBillDate(self, lastKnownBillDate):
+        # defining additional constants that will be used to store cloud billing
+        # data from BigQuery...
+        self.adj_key = "Adjustments"
+        self.adjusted_total_key = "AdjustedTotal"
+        self.balance_at_date_key = "Balance"
+        self.total_key = "Total"
+        self.adjusted_support_cost_key = "AdjustedSupport"
+
+    def set_last_known_bill_date(self, lastKnownBillDate):
         self.lastKnownBillDate = lastKnownBillDate
 
-    def setBalanceAtDate(self, balanceAtDate):
+    def set_balance_at_date(self, balanceAtDate):
         self.balanceAtDate = balanceAtDate
 
-    def setSumToDate(self, sumToDate):
+    def set_sum_to_date(self, sumToDate):
         self.sumToDate = sumToDate
 
-    def CalculateBill(self):
+    # TODO: check for possible refactoring of the following methods to redefine them as instance methods, class method or static methods
+    def calculate_bill(self):
         """
         This method calculates the bill amount for the Google Cloud Services
         used across a specific time period (as defined in the GCE billing
         channel configuration).
         """
         # defining a few constants...
-        query_costs_credits, query_adjustments, last_start_date_billed_considered = self.InitializeConstantsForBillCalculation()
-
-        # defining additional constants that will be used to store cloud billing
-        # data from BigQuery...
-        adj_key = "Adjustments"
-        adjusted_total_key = "AdjustedTotal"
-        balance_at_date_key = "Balance"
-        global total_key, adjusted_support_cost_key
-        total_key = "Total"
-        adjusted_support_cost_key = "AdjustedSupport"
+        query_costs_credits, query_adjustments, last_start_date_billed_considered = self.initialize_constants_for_bill_calculation()
 
         # invoking bigquery client APIs to query BigQuery for cloud billing
         # data...
-        bq_client = bigquery.Client()
-        line_items_costs = self.CalculateSubTotals(bq_client, query_costs_credits, cost_query=True)
-        self.logger.debug(f"Line item costs: {line_items_costs}")
+        try:
+            bq_client = bigquery.Client()
+        except DefaultCredentialsError:
+            self.logger.error("**** AUTHENTICATION FAILED: Incorrect/Corrupted private key! Please verify. ****")
+            raise
+
+        line_items_costs = self.calculate_sub_totals(bq_client, query_costs_credits, cost_query=True)
+        self.logger.info(f"Line item costs: {line_items_costs}")
 
         # using similar logic to gather data about adjustments issued...
-        adj_issued = self.CalculateSubTotals(bq_client, query_adjustments)
-        self.logger.debug(f"Line Item adjustments: {adj_issued}")
+        adj_issued = self.calculate_sub_totals(bq_client, query_adjustments)
+        self.logger.info(f"Line Item adjustments: {adj_issued}")
 
         # adding information from the adjustments dictionary to the costs
         # dictionary...
         for adj_line_item in adj_issued:
             # if the key is 'Total', skip the iteration
-            if adj_line_item == total_key:
+            if adj_line_item == self.total_key:
                 continue
             # if the key is not found in the list of keys for the dictionary
             # containing line items costs, then report an error/throw a warning
@@ -78,11 +84,11 @@ class GCEBillCalculator(object):
             value = line_items_costs[adj_line_item]
             # add a new key-pair to the line item entry in the line items costs
             # dictionary; the key-pair represents the adjustments info
-            line_items_costs[adj_line_item][adj_key] = adj_issued[adj_line_item]
+            line_items_costs[adj_line_item][self.adj_key] = adj_issued[adj_line_item]
         # after the adjustments info is added, calculate the adjusted total
-        line_items_costs[adjusted_total_key] = line_items_costs[total_key] + line_items_costs[adjusted_support_cost_key]
+        line_items_costs[self.adjusted_total_key] = line_items_costs[self.total_key] + line_items_costs[self.adjusted_support_cost_key]
         # calculating the remaining balance (after the costs are deducted)
-        line_items_costs[balance_at_date_key] = self.balanceAtDate - line_items_costs[adjusted_total_key]
+        line_items_costs[self.balance_at_date_key] = self.balanceAtDate - line_items_costs[self.adjusted_total_key]
 
         self.logger.info(f"Bill computation for '{self.project_id}' account finished at {time.strftime('%c')}")
         self.logger.info(f"Last Start Date Billed Considered : {last_start_date_billed_considered.strftime('%m/%d/%y %H:%M')}")
@@ -96,14 +102,14 @@ class GCEBillCalculator(object):
 
         return costs
 
-    def sendDataToGraphite(self, CorrectedBillSummaryDict ):
+    def send_data_to_graphite(self, CorrectedBillSummaryDict ):
         graphiteHost=self.globalConfig['graphite_host']
         graphiteContext=self.globalConfig['graphite_context_billing'] + str(self.project_id)
 
         graphiteEndpoint = graphite.Graphite(host=graphiteHost)
         graphiteEndpoint.send_dict(graphiteContext, CorrectedBillSummaryDict, send_data=True)
 
-    def InitializeConstantsForBillCalculation(self):
+    def initialize_constants_for_bill_calculation(self):
         """
         This method initializes several constants necessary for calculating the bill amount for using Google Cloud services
         """
@@ -139,31 +145,35 @@ class GCEBillCalculator(object):
 
         # queries to query cloud billing data in BigQuery
         # date format in bigquery: YYYY-MM-DD HH:MM:SS:MS TZ
-        costs_query = f'''
-        SELECT sku.description as Sku, service.description as Service, ROUND(SUM(CAST(cost AS NUMERIC)), 8) as rawCost, ROUND(SUM(IFNULL((SELECT SUM(CAST(c.amount AS NUMERIC)) FROM UNNEST(credits) AS c), 0)), 8) as rawCredits FROM `hepcloud-fnal.hepcloud_fnal_bigquery_billing.gcp_billing_export_v1_0175D2_253B59_AB11A7` WHERE project.id = "hepcloud-fnal" AND DATE(usage_start_time) BETWEEN "{usage_start_from.date()}" AND "{usage_end_to.date()}" AND DATE(usage_end_time) BETWEEN "{usage_start_from.date()}" AND "{usage_end_to.date()}"
+        costs_query = f"""
+        SELECT sku.description as Sku, service.description as Service, ROUND(SUM(CAST(cost AS NUMERIC)), 8) as rawCost, ROUND(SUM(IFNULL((SELECT SUM(CAST(c.amount AS NUMERIC)) FROM UNNEST(credits) AS c), 0)), 8) as rawCredits FROM `{billing_data_table}` WHERE project.id = '{billing_project_id}' AND DATE(usage_start_time) BETWEEN '{usage_start_from.date()}' AND '{usage_end_to.date()}' AND DATE(usage_end_time) BETWEEN '{usage_start_from.date()}' AND '{usage_end_to.date()}'
         GROUP BY 1, 2
-        '''
-        adjustments_query = f'''
+        """
+        adjustments_query = f"""
         SELECT sku.description as Sku, service.description as Service,
         ROUND(SUM(CAST(cost AS NUMERIC)), 8) as rawAdjustments,
         ROUND(SUM(IFNULL((SELECT SUM(CAST(c.amount AS NUMERIC)) FROM
         UNNEST(credits) AS c), 0)), 8) as rawCredits FROM
-        `hepcloud-fnal.hepcloud_fnal_bigquery_billing.gcp_billing_export_v1_0175D2_253B59_AB11A7`
-        WHERE project.id = "hepcloud-fnal" AND DATE(usage_start_time) BETWEEN
-        "{usage_start_from.date()}" AND "{usage_end_to.date()}" AND
-        DATE(usage_end_time) BETWEEN "{usage_start_from.date()}" AND
-        "{usage_end_to.date()}" AND adjustment_info.id IS NOT NULL
+        `{billing_data_table}` WHERE project.id = '{billing_project_id}' AND DATE(usage_start_time) BETWEEN '{usage_start_from.date()}' AND '{usage_end_to.date()}' AND DATE(usage_end_time) BETWEEN '{usage_start_from.date()}' AND '{usage_end_to.date()}' AND adjustment_info.id IS NOT NULL
         GROUP BY 1, 2
-        '''
+        """
 
         return costs_query, adjustments_query, last_start_date
 
-    def QueryCloudBillingData(self, bigquery_client, query, cost_query=None):
+    def query_cloud_billing_data(self, bigquery_client, query, cost_query=None):
         """
         This method queries BigQuery to fetch costs,
         credits and adjustments data from cloud billing data.
         """
-        query_result = bigquery_client.query(query).to_dataframe()
+        try:
+            query_result = bigquery_client.query(query).to_dataframe()
+        except RefreshError as rEx:
+            if rEx.args[1]['error_description'] == "Invalid grant: account not found":
+                self.logger.error("**** AUTHENTICATION FAILED: One/more fields in the credential might be incorrect/corrupted! ****")
+            elif rEx.args[1]['error_description'] == "Invalid JWT Signature.":
+                self.logger.error("**** AUTHENTICATION FAILED: Invalid credential file!! ****")
+            raise
+
         # check the query flag to determine whether query for costs or
         # adjustments was run
         if cost_query:
@@ -182,9 +192,9 @@ class GCEBillCalculator(object):
 
         return result, target_column
 
-    def CalculateSubTotals(self, bigquery_client, query, cost_query = None):
+    def calculate_sub_totals(self, bigquery_client, query, cost_query = None):
         """
-        This method conputes the total cost and total adjustments
+        This method computes the total cost and total adjustments
         issued individually.
         """
         # defining additional constants that will be used to store cloud billing data from BigQuery...
@@ -192,12 +202,12 @@ class GCEBillCalculator(object):
         credit_key = "Credits"
         cost_key = "Cost"
         if cost_query:
-            query_result, cost_column = self.QueryCloudBillingData(bigquery_client, query, cost_query)
+            query_result, cost_column = self.query_cloud_billing_data(bigquery_client, query, cost_query)
             sub_totals = dict()
-            sub_totals[total_key] = 0.0
-            sub_totals[adjusted_support_cost_key] = 0.0
+            sub_totals[self.total_key] = 0.0
+            sub_totals[self.adjusted_support_cost_key] = 0.0
         else:
-            query_result, adjColumn = self.QueryCloudBillingData(bigquery_client, query)
+            query_result, adjColumn = self.query_cloud_billing_data(bigquery_client, query)
             sub_totals = defaultdict(float)
 
         for service_name, sku in query_result.items():
@@ -219,7 +229,7 @@ class GCEBillCalculator(object):
                     sub_totals[line_item] = total
                 # add the line item cost to the cumulative costs for the time
                 # window for which the bill is being calculated
-                sub_totals[total_key] += total
+                sub_totals[self.total_key] += total
 
         return sub_totals
 
