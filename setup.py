@@ -9,7 +9,7 @@ setuptools.setup(
     author="Maria P. Acosta F./HEPCloud project",
     author_email="macosta@fnal.gov",
     description="Billing calculations and threshold alarms for hybrid cloud setups",
-    install_requires=['gcs_oauth2_boto_plugin', 'pyparsing', 'google-cloud-bigquery', 'google-cloud-bigquery[pandas]'],
+    install_requires=['gcs_oauth2_boto_plugin', 'pyparsing', 'google-cloud-bigquery[pandas]'],
     long_description=long_description,
     long_description_content_type="text/markdown",
     license='MIT',
